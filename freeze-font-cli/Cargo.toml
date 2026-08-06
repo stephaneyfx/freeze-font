@@ -1,0 +1,23 @@
+[package]
+name = "freeze-font-cli"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+description = "CLI to freeze opentype features"
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "freeze-font"
+path = "src/main.rs"
+
+[dependencies]
+ab_glyph = "0.2.32"
+anyhow = "1.0.104"
+clap = { version = "4.6.4", features = ["derive"] }
+fontdb = "0.23.0"
+freeze-font = { path = "../freeze-font" }
+itertools = "0.15.0"
+read-fonts = "0.42.1"
+url = "2.5.8"

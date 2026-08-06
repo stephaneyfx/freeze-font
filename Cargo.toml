@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = [
+    "freeze-font",
+    "freeze-font-cli"
+]
+
+[workspace.package]
+authors = ["Stephane Raux <stephaneyfx@gmail.com>"]
+edition = "2024"
+license = "0BSD"
+homepage = "https://github.com/stephaneyfx/freeze-font"
+repository = "https://github.com/stephaneyfx/freeze-font.git"
