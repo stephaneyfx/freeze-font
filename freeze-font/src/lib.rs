@@ -101,7 +101,7 @@ pub fn substitutions(
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Freeze {
     features: Vec<String>,
     substitutions: Vec<(char, u16)>,
@@ -120,21 +120,7 @@ pub struct Freeze {
 
 impl Freeze {
     pub fn new() -> Self {
-        Self {
-            features: Vec::new(),
-            substitutions: Vec::new(),
-            cmap_excluded_platforms: HashSet::new(),
-            clean_names: false,
-            copyright: None,
-            family: None,
-            subfamily: None,
-            unique_id: None,
-            full_name: None,
-            version: None,
-            postscript_name: None,
-            description: None,
-            vendor_url: None,
-        }
+        Default::default()
     }
 
     pub fn add_feature<S>(mut self, feature: S) -> Self
@@ -327,7 +313,8 @@ impl Freeze {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let cmap = write_fonts::tables::cmap::Cmap::from_mappings(mapping)?;
-        let mut name: write_fonts::tables::name::Name = font.name()?.to_owned_table();
+        let original_name = font.name()?;
+        let mut name: write_fonts::tables::name::Name = original_name.to_owned_table();
         if self.clean_names {
             name.name_record.retain(name_record_is_default);
         }
@@ -372,7 +359,7 @@ impl Freeze {
         let fvar = self
             .family
             .as_ref()
-            .map(|family| build_fvar(&font, family, &mut name))
+            .map(|family| build_fvar(&font, family, &mut name, &original_name))
             .transpose()?
             .flatten();
         name.name_record.sort();
@@ -385,10 +372,47 @@ impl Freeze {
     }
 }
 
-fn name_record_is_default(r: &write_fonts::tables::name::NameRecord) -> bool {
-    r.platform_id == DEFAULT_PLATFORM.id().0
-        && r.encoding_id == DEFAULT_ENCODING_ID
-        && r.language_id == DEFAULT_LANG_ID
+pub trait NameRecord {
+    fn platform_id(&self) -> PlatformId;
+    fn encoding_id(&self) -> u16;
+    fn language_id(&self) -> u16;
+}
+
+impl NameRecord for read_fonts::tables::name::NameRecord {
+    fn platform_id(&self) -> PlatformId {
+        PlatformId(self.platform_id.get())
+    }
+
+    fn encoding_id(&self) -> u16 {
+        self.encoding_id.get()
+    }
+
+    fn language_id(&self) -> u16 {
+        self.language_id.get()
+    }
+}
+
+impl NameRecord for write_fonts::tables::name::NameRecord {
+    fn platform_id(&self) -> PlatformId {
+        PlatformId(self.platform_id)
+    }
+
+    fn encoding_id(&self) -> u16 {
+        self.encoding_id
+    }
+
+    fn language_id(&self) -> u16 {
+        self.language_id
+    }
+}
+
+fn name_record_is_default<R>(r: &R) -> bool
+where
+    R: NameRecord,
+{
+    r.platform_id() == DEFAULT_PLATFORM.id()
+        && r.encoding_id() == DEFAULT_ENCODING_ID
+        && r.language_id() == DEFAULT_LANG_ID
 }
 
 fn set_name<S>(names: &mut Vec<write_fonts::tables::name::NameRecord>, id: NameId, value: S)
@@ -397,7 +421,7 @@ where
 {
     match names
         .iter_mut()
-        .find(|r| name_record_is_default(r) && r.name_id == id)
+        .find(|r| name_record_is_default(*r) && r.name_id == id)
     {
         Some(r) => r.string.set(value),
         None => names.push(write_fonts::tables::name::NameRecord::new(
@@ -408,6 +432,18 @@ where
             OffsetMarker::new(value.into()),
         )),
     }
+}
+
+pub fn get_name(
+    name: &read_fonts::tables::name::Name<'_>,
+    id: NameId,
+) -> Result<Option<String>, Error> {
+    name.name_record()
+        .iter()
+        .find(|&r| name_record_is_default(r) && r.name_id.get() == id)
+        .map(|r| r.string(name.string_data()).map(|s| s.to_string()))
+        .transpose()
+        .map_err(Into::into)
 }
 
 pub fn cmap_rev_mapping(
@@ -439,6 +475,7 @@ fn build_fvar(
     font: &read_fonts::FontRef<'_>,
     family: &str,
     name: &mut write_fonts::tables::name::Name,
+    original_name: &read_fonts::tables::name::Name,
 ) -> Result<Option<write_fonts::tables::fvar::Fvar>, Error> {
     let original_fvar = match font.fvar() {
         Ok(t) => t,
@@ -453,13 +490,8 @@ fn build_fvar(
         let name_id = instance
             .post_script_name_id
             .unwrap_or_else(|| name_appender.next_id());
-        let subfamily = &*name_appender
-            .name
-            .name_record
-            .iter()
-            .find(|r| name_record_is_default(r) && r.name_id == instance.subfamily_name_id)
-            .ok_or_else(|| Error::NameRecordNotFound(instance.subfamily_name_id.to_u16()))?
-            .string;
+        let subfamily = get_name(original_name, instance.subfamily_name_id)?
+            .ok_or_else(|| Error::NameRecordNotFound(instance.subfamily_name_id.to_u16()))?;
         let postscript_name = format!("{family}-{subfamily}");
         set_name(
             &mut name_appender.name.name_record,
@@ -481,7 +513,7 @@ impl<'a> NameAppender<'a> {
         let next_id = name
             .name_record
             .iter()
-            .filter(|r| name_record_is_default(r))
+            .filter(|r| name_record_is_default(*r))
             .map(|r| r.name_id.to_u16())
             .max()
             .unwrap_or(255)

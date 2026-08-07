@@ -56,6 +56,8 @@ enum CliCommand {
     Alternates(Alternates),
     Features(Features),
     Names(Names),
+    #[command(name = "fvar")]
+    Variations(Variations),
     Freeze(Freeze),
 }
 
@@ -66,6 +68,7 @@ impl CliCommand {
             CliCommand::Alternates(cmd) => cmd.run(font_bytes, font_index),
             CliCommand::Features(cmd) => cmd.run(font_bytes, font_index),
             CliCommand::Names(cmd) => cmd.run(font_bytes, font_index),
+            CliCommand::Variations(cmd) => cmd.run(font_bytes, font_index),
             CliCommand::Freeze(cmd) => cmd.run(font_bytes, font_index),
         }
     }
@@ -246,6 +249,53 @@ impl Names {
 }
 
 #[derive(Args, Debug)]
+struct Variations;
+
+impl Variations {
+    fn run(self, font_bytes: Vec<u8>, font_index: u32) -> anyhow::Result<()> {
+        let font = read_fonts::FontRef::from_index(&font_bytes, font_index)?;
+        let fvar = font.fvar()?;
+        let name = font.name()?;
+        println!("variation axes:");
+        for axis in fvar.axes()? {
+            println!("  tag={}", axis.axis_tag());
+            println!("  min={}", axis.min_value());
+            println!("  default={}", axis.default_value());
+            println!("  max={}", axis.max_value());
+            println!("  flags={}", axis.flags());
+            println!(
+                "  name={}",
+                freeze_font::get_name(&name, axis.axis_name_id())?.context("name ID not found")?
+            );
+            println!()
+        }
+        println!("instances:");
+        for instance in fvar.instances()?.iter() {
+            let instance = instance?;
+            println!(
+                "  subfamily={}",
+                freeze_font::get_name(&name, instance.subfamily_name_id)?
+                    .context("name ID not found")?
+            );
+            println!("  flags={}", instance.flags);
+            println!(
+                "  coordinates={}",
+                instance.coordinates.iter().map(|c| c.get()).format(", ")
+            );
+            println!(
+                "  postscript name={:?}",
+                instance
+                    .post_script_name_id
+                    .map(|id| freeze_font::get_name(&name, id)?.context("name ID not found"))
+                    .transpose()?
+            );
+            println!();
+        }
+        Ok(())
+    }
+}
+
+#[derive(Args, Debug)]
 struct Freeze {
     #[arg(long = "feature")]
     features: Vec<String>,
@@ -341,7 +391,7 @@ impl FromStr for Substitution {
                     (Some(c), None) => c,
                     _ => match codepoint.strip_prefix("0x") {
                         Some(digits) => u32::from_str_radix(digits, 16)?.try_into()?,
-                        _ => u32::from_str_radix(codepoint, 10)?.try_into()?,
+                        _ => codepoint.parse::<u32>()?.try_into()?,
                     },
                 }
             },
