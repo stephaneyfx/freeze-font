@@ -155,14 +155,17 @@ impl Alternates {
         println!("{target}: {alternates:?}");
         println!();
         for r in cmap.encoding_records() {
-            if let Ok(t) = r.subtable(cmap.offset_data())
-                && let Some(gid) = t.map_codepoint(b'I')
+            if let Ok(read_fonts::tables::cmap::CmapSubtable::Format4(cmap4)) =
+                r.subtable(cmap.offset_data())
             {
                 println!(
-                    "{gid} found in table cmap{}, platform {:?}, encoding {}",
-                    t.format(),
-                    r.platform_id(),
-                    r.encoding_id()
+                    "cmap4 start: [{}], end: [{}]",
+                    cmap4.start_code()[cmap4.start_code().len().saturating_sub(2)..]
+                        .iter()
+                        .format(","),
+                    cmap4.end_code()[cmap4.end_code().len().saturating_sub(2)..]
+                        .iter()
+                        .format(","),
                 );
             }
         }

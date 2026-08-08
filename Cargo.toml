@@ -11,3 +11,9 @@ edition = "2024"
 license = "0BSD"
 homepage = "https://github.com/stephaneyfx/freeze-font"
 repository = "https://github.com/stephaneyfx/freeze-font.git"
+
+[workspace.dependencies]
+itertools = "0.15.0"
+read-fonts = "0.42.1"
+url = "2.5.8"
+write-fonts = "0.51.0"

@@ -11,8 +11,8 @@ repository.workspace = true
 [dependencies]
 either = "1.17.0"
 enum-iterator = "2.3.0"
-itertools = "0.15.0"
-read-fonts = "0.42.1"
+itertools.workspace = true
+read-fonts.workspace = true
 thiserror = "2.0.19"
-url = "2.5.8"
-write-fonts = "0.51.0"
+url.workspace = true
+write-fonts.workspace = true
