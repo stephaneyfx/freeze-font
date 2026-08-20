@@ -490,8 +490,9 @@ fn build_fvar(
         let name_id = instance
             .post_script_name_id
             .unwrap_or_else(|| name_appender.next_id());
-        let subfamily = get_name(original_name, instance.subfamily_name_id)?
+        let mut subfamily = get_name(original_name, instance.subfamily_name_id)?
             .ok_or_else(|| Error::NameRecordNotFound(instance.subfamily_name_id.to_u16()))?;
+        subfamily.retain(|c| !c.is_whitespace());
         let postscript_name = format!("{family}-{subfamily}");
         set_name(
             &mut name_appender.name.name_record,
