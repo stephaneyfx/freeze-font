@@ -5,7 +5,7 @@ use read_fonts::{
     tables::{
         cmap::Cmap,
         gsub::{SingleSubst, SubstitutionLookup, SubstitutionLookupList},
-        layout::Feature,
+        layout::{Feature, FeatureParams},
     },
     types::{GlyphId, NameId},
 };
@@ -501,6 +501,17 @@ fn build_fvar(
         );
     }
     Ok(Some(fvar))
+}
+
+pub fn feature_ui_label(
+    feature_params: &FeatureParams<'_>,
+    name: &read_fonts::tables::name::Name<'_>,
+) -> Result<Option<String>, Error> {
+    match feature_params {
+        FeatureParams::StylisticSet(f) => get_name(name, f.ui_name_id()),
+        FeatureParams::CharacterVariant(f) => get_name(name, f.feat_ui_label_name_id()),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Debug)]

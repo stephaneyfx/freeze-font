@@ -1,7 +1,9 @@
 use ab_glyph::Font as _;
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use freeze_font::{Platform, cmap_rev_mapping, feature_substitutions, substitutions};
+use freeze_font::{
+    Platform, cmap_rev_mapping, feature_substitutions, feature_ui_label, substitutions,
+};
 use itertools::Itertools;
 use read_fonts::{TableProvider, types::Tag};
 use std::{
@@ -187,14 +189,26 @@ impl Features {
             .map(Platform::id)
             .collect::<HashSet<_>>();
         let font = read_fonts::FontRef::from_index(&font_bytes, font_index)?;
+        let name = font.name()?;
         let cmap = font.cmap()?;
         let mapping = cmap_rev_mapping(&cmap)?;
         let gsub = font.gsub()?;
         let sub_lookup_list = gsub.lookup_list()?;
         let feature_list = gsub.feature_list()?;
         let mut subs_by_tag = HashMap::<Tag, HashSet<(char, u16)>>::new();
+        let mut feature_ui_labels = HashMap::<Tag, String>::new();
         for feature_record in feature_list.feature_records() {
             let feature = feature_record.feature(feature_list.offset_data())?;
+            if let std::collections::hash_map::Entry::Vacant(p) =
+                feature_ui_labels.entry(feature_record.feature_tag())
+                && let Some(label) = feature
+                    .feature_params()
+                    .transpose()?
+                    .and_then(|p| feature_ui_label(&p, &name).transpose())
+                    .transpose()?
+            {
+                p.insert(label);
+            }
             let subs = subs_by_tag.entry(feature_record.feature_tag()).or_default();
             for sub in feature_substitutions(feature, &sub_lookup_list) {
                 let sub = sub?;
@@ -211,7 +225,10 @@ impl Features {
             }
         }
         for (tag, subs) in subs_by_tag.iter().sorted_by_key(|&(&tag, _)| tag) {
-            println!("{tag}:");
+            match feature_ui_labels.get(tag) {
+                Some(label) => println!("{tag} ({label}):"),
+                None => println!("{tag}:"),
+            }
             for &(c, sub) in subs.iter().sorted_by_key(|&&(c, _)| c) {
                 println!("  {c} [{}]: {sub}", u32::from(c));
             }
@@ -222,9 +239,12 @@ impl Features {
             .feature_records()
             .iter()
             .unique_by(|f| f.feature_tag)
-            .map(|f| f.feature_tag)
+            .map(|f| f.feature_tag.get())
             .sorted()
-            .join(", ");
+            .format_with(", ", |tag, f| match feature_ui_labels.get(&tag) {
+                Some(label) => f(&format_args!("{tag} ({label})")),
+                None => f(&tag),
+            });
         println!("features: {features}");
         Ok(())
     }
