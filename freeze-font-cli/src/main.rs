@@ -422,7 +422,7 @@ impl Freeze {
             .add_substitutions(
                 self.substitutions
                     .into_iter()
-                    .map(|sub| (sub.character, sub.glyph)),
+                    .map(|sub| (sub.original_glyph_id, sub.sub_glyph_id)),
             )
             .exclude_cmap_platforms(self.excluded_cmap_platforms)
             .clean_names(self.clean_names);
@@ -461,29 +461,20 @@ impl Freeze {
 
 #[derive(Clone, Copy, Debug)]
 struct Substitution {
-    character: char,
-    glyph: u16,
+    original_glyph_id: u16,
+    sub_glyph_id: u16,
 }
 
 impl FromStr for Substitution {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (codepoint, glyph) = s
+        let (before, after) = s
             .split_once(':')
             .context("failed to find ':' in substitution")?;
         Ok(Self {
-            character: {
-                let mut chars = codepoint.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(c), None) => c,
-                    _ => match codepoint.strip_prefix("0x") {
-                        Some(digits) => u32::from_str_radix(digits, 16)?.try_into()?,
-                        _ => codepoint.parse::<u32>()?.try_into()?,
-                    },
-                }
-            },
-            glyph: glyph.parse()?,
+            original_glyph_id: before.parse()?,
+            sub_glyph_id: after.parse()?,
         })
     }
 }

@@ -104,7 +104,7 @@ pub fn substitutions(
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Freeze {
     features: Vec<String>,
-    substitutions: Vec<(char, u16)>,
+    substitutions: Vec<(u16, u16)>,
     cmap_excluded_platforms: HashSet<Platform>,
     clean_names: bool,
     copyright: Option<String>,
@@ -139,14 +139,14 @@ impl Freeze {
         self
     }
 
-    pub fn add_substitution(mut self, character: char, glyph_id: u16) -> Self {
-        self.substitutions.push((character, glyph_id));
+    pub fn add_substitution(mut self, original_glyph_id: u16, sub_glyph_id: u16) -> Self {
+        self.substitutions.push((original_glyph_id, sub_glyph_id));
         self
     }
 
     pub fn add_substitutions<I>(mut self, substitutions: I) -> Self
     where
-        I: IntoIterator<Item = (char, u16)>,
+        I: IntoIterator<Item = (u16, u16)>,
     {
         self.substitutions.extend(substitutions);
         self
@@ -279,39 +279,48 @@ impl Freeze {
                     .map(|f| f.feature(feature_list.offset_data()))
             })
             .flat_map(|feature| match feature {
-                Ok(feature) => Right(
-                    feature_substitutions(feature, &sub_lookup_list)
-                        .map_ok(|(src, dst)| (GlyphId::new(src.into()), GlyphId::new(dst.into()))),
-                ),
+                Ok(feature) => Right(feature.lookup_list_indices().iter().map(|index| {
+                    let index = usize::from(index.get());
+                    match sub_lookup_list.lookups().get(index) {
+                        Ok(sub) => substitutions(sub).collect::<Result<HashMap<_, _>, Error>>(),
+                        Err(e) => Err(e.into()),
+                    }
+                })),
                 Err(e) => Left(std::iter::once(Err(e.into()))),
             })
-            .collect::<Result<HashSet<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         let explicit_subs = self
             .substitutions
             .iter()
             .copied()
-            .filter_map(|(c, glyph_id)| {
-                original_cmap
-                    .map_codepoint(c)
-                    .map(|original_glyph| (original_glyph, GlyphId::new(glyph_id.into())))
-            });
-        let all_subs = subs_from_features
-            .into_iter()
-            .chain(explicit_subs)
             .collect::<HashMap<_, _>>();
+        let mut all_subs = subs_from_features;
+        all_subs.push(explicit_subs);
         let mapping = original_cmap
             .encoding_records()
             .iter()
             .filter(|r| !cmap_excluded_platforms.contains(&r.platform_id().into()))
             .flat_map(|r| match r.subtable(original_cmap.offset_data()) {
                 Ok(t) => Right(t.iter().map(|(codepoint, glyph)| {
-                    char::try_from(codepoint)
-                        .map_err(|_| Error::InvalidCodepoint(codepoint))
-                        .map(|c| (c, all_subs.get(&glyph).copied().unwrap_or(glyph)))
+                    let c = char::try_from(codepoint)
+                        .map_err(|_| Error::InvalidCodepoint(codepoint))?;
+                    let glyph_id =
+                        u16::try_from(glyph.to_u32()).map_err(|_| Error::GlyphIdOutOfRange)?;
+                    Ok::<_, Error>((c, glyph_id))
                 })),
                 Err(e) => Left(std::iter::once(Err(e.into()))),
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        let mapping = mapping
+            .into_iter()
+            .sorted_by_key(|&(c, _)| c)
+            .map(|(c, glyph_id)| {
+                (
+                    c,
+                    GlyphId::new(substitute_glyph_id(&all_subs, glyph_id).into()),
+                )
+            })
+            .collect::<Vec<_>>();
         let cmap = write_fonts::tables::cmap::Cmap::from_mappings(mapping)?;
         let original_name = font.name()?;
         let mut name: write_fonts::tables::name::Name = original_name.to_owned_table();
@@ -512,6 +521,12 @@ pub fn feature_ui_label(
         FeatureParams::CharacterVariant(f) => get_name(name, f.feat_ui_label_name_id()),
         _ => Ok(None),
     }
+}
+
+fn substitute_glyph_id(subs: &[HashMap<u16, u16>], glyph_id: u16) -> u16 {
+    subs.iter().fold(glyph_id, |glyph_id, subs| {
+        subs.get(&glyph_id).copied().unwrap_or(glyph_id)
+    })
 }
 
 #[derive(Debug)]
