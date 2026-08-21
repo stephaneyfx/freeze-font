@@ -15,9 +15,13 @@ path = "src/main.rs"
 [dependencies]
 ab_glyph = "0.2.32"
 anyhow = "1.0.104"
+base64 = "0.23.1"
 clap = { version = "4.6.4", features = ["derive"] }
 fontdb = "0.23.0"
 freeze-font = { path = "../freeze-font" }
+image = "0.25.10"
 itertools.workspace = true
+nestxml = "0.3.0"
 read-fonts.workspace = true
 url.workspace = true
+xml = "1.4.0"

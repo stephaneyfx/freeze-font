@@ -1,17 +1,29 @@
 use ab_glyph::Font as _;
 use anyhow::Context;
+use base64::Engine;
 use clap::{Args, Parser, Subcommand};
-use freeze_font::{
-    Platform, cmap_rev_mapping, feature_substitutions, feature_ui_label, substitutions,
-};
+use freeze_font::{Platform, feature_substitutions, feature_ui_label, substitutions};
+use image::{ImageFormat, RgbaImage};
 use itertools::Itertools;
 use read_fonts::{TableProvider, types::Tag};
 use std::{
     collections::{HashMap, HashSet},
+    io::BufWriter,
     path::PathBuf,
     str::FromStr,
 };
 use url::Url;
+
+const HTML_STYLE: &str = r##"
+table {
+    border-collapse: collapse;
+}
+
+td, th {
+    border: 1px solid #dddddd;
+    padding: 8px;
+}
+"##;
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -93,7 +105,9 @@ impl DrawCommand {
             |c| font.glyph_id(c),
         );
         let glyph = glyph_id.with_scale_and_position(self.scale, (0.0_f32, 0.0_f32));
-        let outline = font.outline_glyph(glyph).unwrap();
+        let outline = font
+            .outline_glyph(glyph)
+            .context("glyph outline not found")?;
         let bounds = outline.px_bounds();
         let width = bounds.width() as usize;
         let height = bounds.height() as usize;
@@ -177,63 +191,114 @@ impl Alternates {
 
 #[derive(Args, Debug)]
 struct Features {
-    #[arg(long = "exclude-platform")]
-    excluded_cmap_platforms: Vec<Platform>,
+    #[arg(long)]
+    scale: f32,
+    #[arg(long, short)]
+    out: PathBuf,
 }
 
 impl Features {
     fn run(self, font_bytes: Vec<u8>, font_index: u32) -> anyhow::Result<()> {
-        let excluded_platforms = self
-            .excluded_cmap_platforms
-            .into_iter()
-            .map(Platform::id)
-            .collect::<HashSet<_>>();
         let font = read_fonts::FontRef::from_index(&font_bytes, font_index)?;
         let name = font.name()?;
-        let cmap = font.cmap()?;
-        let mapping = cmap_rev_mapping(&cmap)?;
         let gsub = font.gsub()?;
         let sub_lookup_list = gsub.lookup_list()?;
         let feature_list = gsub.feature_list()?;
-        let mut subs_by_tag = HashMap::<Tag, HashSet<(char, u16)>>::new();
-        let mut feature_ui_labels = HashMap::<Tag, String>::new();
+        let mut features = HashMap::<Tag, FeatureInfo>::new();
         for feature_record in feature_list.feature_records() {
             let feature = feature_record.feature(feature_list.offset_data())?;
-            if let std::collections::hash_map::Entry::Vacant(p) =
-                feature_ui_labels.entry(feature_record.feature_tag())
+            let info = features
+                .entry(feature_record.feature_tag())
+                .or_insert_with(|| FeatureInfo::new(feature_record.feature_tag()));
+            if info.label.is_none()
                 && let Some(label) = feature
                     .feature_params()
                     .transpose()?
                     .and_then(|p| feature_ui_label(&p, &name).transpose())
                     .transpose()?
             {
-                p.insert(label);
+                info.label = Some(label);
             }
-            let subs = subs_by_tag.entry(feature_record.feature_tag()).or_default();
             for sub in feature_substitutions(feature, &sub_lookup_list) {
-                let sub = sub?;
-                subs.extend(
-                    mapping
-                        .get(&sub.0)
-                        .into_iter()
-                        .flatten()
-                        .filter(|(platform, _)| !excluded_platforms.contains(platform))
-                        .flat_map(|(_, codepoints)| codepoints)
-                        .copied()
-                        .map(|c| (c, sub.1)),
-                );
+                info.substitutions.push(sub?);
             }
         }
-        for (tag, subs) in subs_by_tag.iter().sorted_by_key(|&(&tag, _)| tag) {
-            match feature_ui_labels.get(tag) {
-                Some(label) => println!("{tag} ({label}):"),
-                None => println!("{tag}:"),
-            }
-            for &(c, sub) in subs.iter().sorted_by_key(|&&(c, _)| c) {
-                println!("  {c} [{}]: {sub}", u32::from(c));
-            }
-        }
-        println!();
+        features
+            .values_mut()
+            .for_each(|info| info.substitutions.sort_by_key(|&(k, _)| k));
+        let feature_ui_labels = features
+            .values()
+            .filter_map(|f| f.label.as_ref().map(|label| (f.tag, label.clone())))
+            .collect::<HashMap<_, _>>();
+        let features = features
+            .into_values()
+            .sorted_by_key(|f| f.tag)
+            .collect::<Vec<_>>();
+        let ab_font = ab_glyph::FontRef::try_from_slice_and_index(&font_bytes, font_index)?;
+        let doc = b"<!DOCTYPE html>\n".to_vec();
+        let mut out = xml::EmitterConfig::new()
+            .write_document_declaration(false)
+            .perform_indent(true)
+            .create_writer(doc);
+        nestxml::html::html(&mut out).write_res(|out| {
+            nestxml::html::head(out).write(|out| {
+                nestxml::html::title(out).text("Font features")?;
+                nestxml::html::style(out).text(HTML_STYLE)
+            })?;
+            nestxml::html::body(out).write_res(|out| {
+                for feature in features {
+                    match feature.label {
+                        Some(label) => {
+                            nestxml::html::h1(out).text(&format!("{} ({label})", feature.tag))
+                        }
+                        None => nestxml::html::h1(out).text(&feature.tag.to_string()),
+                    }?;
+                    if feature.substitutions.is_empty() {
+                        nestxml::html::p(out).text("No substitutions found")?;
+                        continue;
+                    }
+                    nestxml::html::table(out).write_res(|out| {
+                        nestxml::html::tr(out).write(|out| {
+                            nestxml::html::th(out).text("Original")?;
+                            nestxml::html::th(out).text("Substitution")?;
+                            nestxml::html::th(out).text("Before")?;
+                            nestxml::html::th(out).text("After")
+                        })?;
+                        for (src, dst) in feature.substitutions {
+                            nestxml::html::tr(out).write_res(|out| {
+                                nestxml::html::td(out).text(&src.to_string())?;
+                                nestxml::html::td(out).text(&dst.to_string())?;
+                                nestxml::html::td(out).write_res(|out| {
+                                    nestxml::html::img(out)
+                                        .attr(
+                                            "src",
+                                            img_base64_uri(&glyph_to_image(
+                                                &ab_font, src, self.scale,
+                                            )?),
+                                        )
+                                        .empty()?;
+                                    anyhow::Ok(())
+                                })?;
+                                nestxml::html::td(out).write_res(|out| {
+                                    nestxml::html::img(out)
+                                        .attr(
+                                            "src",
+                                            img_base64_uri(&glyph_to_image(
+                                                &ab_font, dst, self.scale,
+                                            )?),
+                                        )
+                                        .empty()?;
+                                    anyhow::Ok(())
+                                })
+                            })?;
+                        }
+                        anyhow::Ok(())
+                    })?;
+                }
+                anyhow::Ok(())
+            })
+        })?;
+        std::fs::write(&self.out, out.into_inner())?;
         let features = gsub
             .feature_list()?
             .feature_records()
@@ -457,6 +522,60 @@ fn parse_version(s: &str) -> anyhow::Result<(u16, u16)> {
         .parse()
         .context("minor version number must be an u16")?;
     Ok((major, minor))
+}
+
+fn glyph_to_image(
+    font: &ab_glyph::FontRef<'_>,
+    glyph_id: u16,
+    scale: f32,
+) -> anyhow::Result<RgbaImage> {
+    let glyph_id = ab_glyph::GlyphId(glyph_id);
+    let glyph = glyph_id.with_scale_and_position(scale, (0.0_f32, 0.0_f32));
+    let outline = font
+        .outline_glyph(glyph)
+        .context("glyph outline not found")?;
+    let bounds = outline.px_bounds();
+    let width = bounds.width() as u32;
+    let height = bounds.height() as u32;
+    let mut canvas = RgbaImage::new(width, height);
+    outline.draw(|x, y, v| {
+        if x >= width || y >= height {
+            return;
+        }
+        canvas[(x, y)].0[3] = canvas[(x, y)].0[3].saturating_add((v * 255.0) as u8);
+    });
+    Ok(canvas)
+}
+
+fn img_base64_uri(img: &RgbaImage) -> String {
+    let mut buf = BufWriter::new(std::io::Cursor::new(Vec::new()));
+    img.write_to(&mut buf, ImageFormat::Png)
+        .expect("writing png to memory does not fail");
+    format!(
+        "data:image/png;base64,{}",
+        base64::prelude::BASE64_STANDARD.encode(
+            buf.into_inner()
+                .expect("writing to memory does not fail")
+                .into_inner()
+        )
+    )
+}
+
+#[derive(Clone, Debug)]
+struct FeatureInfo {
+    tag: Tag,
+    label: Option<String>,
+    substitutions: Vec<(u16, u16)>,
+}
+
+impl FeatureInfo {
+    fn new(tag: Tag) -> Self {
+        Self {
+            tag,
+            label: None,
+            substitutions: Vec::new(),
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
