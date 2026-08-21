@@ -107,7 +107,7 @@ impl DrawCommand {
         let glyph = glyph_id.with_scale_and_position(self.scale, (0.0_f32, 0.0_f32));
         let outline = font
             .outline_glyph(glyph)
-            .context("glyph outline not found")?;
+            .with_context(|| format!("outline not found for glyph ID {}", glyph_id.0))?;
         let bounds = outline.px_bounds();
         let width = bounds.width() as usize;
         let height = bounds.height() as usize;
@@ -220,7 +220,8 @@ impl Features {
                 info.label = Some(label);
             }
             for sub in feature_substitutions(feature, &sub_lookup_list) {
-                info.substitutions.push(sub?);
+                let sub = sub?;
+                info.substitutions.push(sub);
             }
         }
         features
@@ -240,12 +241,12 @@ impl Features {
             .write_document_declaration(false)
             .perform_indent(true)
             .create_writer(doc);
-        nestxml::html::html(&mut out).write_res(|out| {
+        nestxml::html::html(&mut out).write(|out| {
             nestxml::html::head(out).write(|out| {
                 nestxml::html::title(out).text("Font features")?;
                 nestxml::html::style(out).text(HTML_STYLE)
             })?;
-            nestxml::html::body(out).write_res(|out| {
+            nestxml::html::body(out).write(|out| {
                 for feature in features {
                     match feature.label {
                         Some(label) => {
@@ -257,7 +258,7 @@ impl Features {
                         nestxml::html::p(out).text("No substitutions found")?;
                         continue;
                     }
-                    nestxml::html::table(out).write_res(|out| {
+                    nestxml::html::table(out).write(|out| {
                         nestxml::html::tr(out).write(|out| {
                             nestxml::html::th(out).text("Original")?;
                             nestxml::html::th(out).text("Substitution")?;
@@ -265,37 +266,31 @@ impl Features {
                             nestxml::html::th(out).text("After")
                         })?;
                         for (src, dst) in feature.substitutions {
-                            nestxml::html::tr(out).write_res(|out| {
+                            nestxml::html::tr(out).write(|out| {
                                 nestxml::html::td(out).text(&src.to_string())?;
                                 nestxml::html::td(out).text(&dst.to_string())?;
-                                nestxml::html::td(out).write_res(|out| {
-                                    nestxml::html::img(out)
-                                        .attr(
-                                            "src",
-                                            img_base64_uri(&glyph_to_image(
-                                                &ab_font, src, self.scale,
-                                            )?),
-                                        )
-                                        .empty()?;
-                                    anyhow::Ok(())
-                                })?;
-                                nestxml::html::td(out).write_res(|out| {
-                                    nestxml::html::img(out)
-                                        .attr(
-                                            "src",
-                                            img_base64_uri(&glyph_to_image(
-                                                &ab_font, dst, self.scale,
-                                            )?),
-                                        )
-                                        .empty()?;
-                                    anyhow::Ok(())
-                                })
+                                match glyph_to_image(&ab_font, src, self.scale) {
+                                    Some(img) => nestxml::html::td(out).write(|out| {
+                                        nestxml::html::img(out)
+                                            .attr("src", img_base64_uri(&img))
+                                            .empty()
+                                    }),
+                                    None => nestxml::html::td(out).empty(),
+                                }?;
+                                match glyph_to_image(&ab_font, dst, self.scale) {
+                                    Some(img) => nestxml::html::td(out).write(|out| {
+                                        nestxml::html::img(out)
+                                            .attr("src", img_base64_uri(&img))
+                                            .empty()
+                                    }),
+                                    None => nestxml::html::td(out).empty(),
+                                }
                             })?;
                         }
-                        anyhow::Ok(())
+                        Ok(())
                     })?;
                 }
-                anyhow::Ok(())
+                Ok(())
             })
         })?;
         std::fs::write(&self.out, out.into_inner())?;
@@ -515,16 +510,9 @@ fn parse_version(s: &str) -> anyhow::Result<(u16, u16)> {
     Ok((major, minor))
 }
 
-fn glyph_to_image(
-    font: &ab_glyph::FontRef<'_>,
-    glyph_id: u16,
-    scale: f32,
-) -> anyhow::Result<RgbaImage> {
-    let glyph_id = ab_glyph::GlyphId(glyph_id);
-    let glyph = glyph_id.with_scale_and_position(scale, (0.0_f32, 0.0_f32));
-    let outline = font
-        .outline_glyph(glyph)
-        .context("glyph outline not found")?;
+fn glyph_to_image(font: &ab_glyph::FontRef<'_>, glyph_id: u16, scale: f32) -> Option<RgbaImage> {
+    let glyph = ab_glyph::GlyphId(glyph_id).with_scale_and_position(scale, (0.0_f32, 0.0_f32));
+    let outline = font.outline_glyph(glyph)?;
     let bounds = outline.px_bounds();
     let width = bounds.width() as u32;
     let height = bounds.height() as u32;
@@ -535,7 +523,7 @@ fn glyph_to_image(
         }
         canvas[(x, y)].0[3] = canvas[(x, y)].0[3].saturating_add((v * 255.0) as u8);
     });
-    Ok(canvas)
+    Some(canvas)
 }
 
 fn img_base64_uri(img: &RgbaImage) -> String {

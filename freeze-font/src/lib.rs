@@ -62,11 +62,9 @@ pub fn substitutions(
                 .map(|sub| match sub? {
                     SingleSubst::Format1(sub) => Ok(Left(sub.coverage()?.iter().map(move |g| {
                         let g = g.to_u16();
-                        Ok((
-                            g,
-                            u16::try_from(i32::from(g) + i32::from(sub.delta_glyph_id()))
-                                .map_err(|_| Error::GlyphIdOutOfRange)?,
-                        ))
+                        let new_g = u16::try_from(i32::from(g) + i32::from(sub.delta_glyph_id()))
+                            .map_err(|_| Error::GlyphIdOutOfRange)?;
+                        Ok((g, new_g))
                     }))),
                     SingleSubst::Format2(sub) => Ok(Right(
                         sub.coverage()?
