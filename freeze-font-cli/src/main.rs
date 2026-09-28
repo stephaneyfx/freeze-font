@@ -398,6 +398,10 @@ struct Freeze {
     uid: Option<String>,
     #[arg(long)]
     full_name: Option<String>,
+    #[arg(long)]
+    typographic_family: Option<String>,
+    #[arg(long)]
+    typographic_subfamily: Option<String>,
     #[arg(long, value_parser = parse_version)]
     version: Option<(u16, u16)>,
     #[arg(long)]
@@ -435,6 +439,12 @@ impl Freeze {
         }
         if let Some(s) = self.full_name {
             builder = builder.with_full_name(s);
+        }
+        if let Some(s) = self.typographic_family {
+            builder = builder.with_typographic_family(s);
+        }
+        if let Some(s) = self.typographic_subfamily {
+            builder = builder.with_typographic_subfamily(s);
         }
         if let Some((major, minor)) = self.version {
             builder = builder.with_version(major, minor);

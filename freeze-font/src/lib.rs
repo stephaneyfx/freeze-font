@@ -110,6 +110,8 @@ pub struct Freeze {
     subfamily: Option<String>,
     unique_id: Option<String>,
     full_name: Option<String>,
+    typographic_family: Option<String>,
+    typographic_subfamily: Option<String>,
     version: Option<(u16, u16)>,
     postscript_name: Option<String>,
     description: Option<String>,
@@ -216,6 +218,26 @@ impl Freeze {
     {
         Self {
             full_name: Some(name.into()),
+            ..self
+        }
+    }
+
+    pub fn with_typographic_family<S>(self, family: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self {
+            typographic_family: Some(family.into()),
+            ..self
+        }
+    }
+
+    pub fn with_typographic_subfamily<S>(self, subfamily: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self {
+            typographic_subfamily: Some(subfamily.into()),
             ..self
         }
     }
@@ -346,6 +368,12 @@ impl Freeze {
         }
         if let Some(s) = &self.full_name {
             set_name(&mut name.name_record, NameId::FULL_NAME, s);
+        }
+        if let Some(s) = &self.typographic_family {
+            set_name(&mut name.name_record, NameId::TYPOGRAPHIC_FAMILY_NAME, s);
+        }
+        if let Some(s) = &self.typographic_subfamily {
+            set_name(&mut name.name_record, NameId::TYPOGRAPHIC_SUBFAMILY_NAME, s);
         }
         if let Some((major, minor)) = self.version {
             set_name(
